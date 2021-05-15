@@ -1,0 +1,157 @@
+---
+title: "xgb002"
+author: Subasish Das (@subasish_das)
+date: "`r Sys.Date()`"
+output:
+   html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+    code_folding: show
+    theme: darkly
+    highlight: espresso
+---
+
+<style>
+    body .main-container {
+        max-width: 2800px;
+    }
+</style>
+
+
+# Extreme Gradient Boost
+### xgboost
+```{r warning=FALSE, message=FALSE, fig.width=14, fig.height=6}
+require(xgboost)
+require(Matrix)
+require(data.table)
+require(vcd)
+
+data(Arthritis)
+df <- data.table(Arthritis, keep.rownames = F)
+head(df)
+head(df[,AgeDiscret := as.factor(round(Age/10,0))])
+head(df[,AgeCat:= as.factor(ifelse(Age > 30, "Old", "Young"))])
+df[,ID:=NULL]
+levels(df[,Treatment])
+
+sparse_matrix <- sparse.model.matrix(Improved ~ ., data = df)[,-1]
+head(sparse_matrix)
+output_vector = df[,Improved] == "Marked"
+
+bst <- xgboost(data = sparse_matrix, label = output_vector, max_depth = 4,
+               eta = 1, nthread = 2, nrounds = 10,objective = "binary:logistic")
+
+importance <- xgb.importance(feature_names = colnames(sparse_matrix), model = bst)
+importanceRaw <- xgb.importance(feature_names = colnames(sparse_matrix), 
+                                model = bst, data = sparse_matrix, label = output_vector)
+# Cleaning for better display
+importanceClean <- importanceRaw[,`:=`(Cover=NULL, Frequency=NULL)]
+xgb.plot.importance(importance_matrix = importance)
+
+
+# }
+# NOT RUN {
+# Below is an example of how to save this plot to a file. 
+# Note that for `export_graph` to work, the DiagrammeRsvg and rsvg packages must also be installed.
+library(DiagrammeR)
+xgb.plot.tree(model=bst, trees=0:1, render=FALSE)
+xgb.plot.tree(model = bst, trees = 0, show_node_id = TRUE)
+```
+
+
+```{r warning=FALSE, message=FALSE, fig.width=14, fig.height=16}
+xgb.plot.tree(model = bst)
+```
+
+
+
+
+### SHAPforxgboost
+```{r warning=FALSE, message=FALSE, fig.width=14, fig.height=6}
+library("SHAPforxgboost")
+dataXY_df
+y_var <-  "diffcwv"
+dataX <- dataXY_df[,-..y_var]
+# hyperparameter tuning results
+param_dart <- list(objective = "reg:linear",  # For regression
+                   nrounds = 366,
+                   eta = 0.018,
+                   max_depth = 10,
+                   gamma = 0.009,
+                   subsample = 0.98,
+                   colsample_bytree = 0.86)
+
+mod <- xgboost::xgboost(data = as.matrix(dataX), label = as.matrix(dataXY_df[[y_var]]), 
+                        xgb_param = param_dart, nrounds = param_dart$nrounds,
+                        verbose = FALSE, nthread = parallel::detectCores() - 2,
+                        early_stopping_rounds = 8)
+
+# To return the SHAP values and ranked features by mean|SHAP|
+shap_values <- shap.values(xgb_model = mod, X_train = dataX)
+# The ranked features by mean |SHAP|
+shap_values$mean_shap_score
+
+# To prepare the long-format data:
+shap_long <- shap.prep(xgb_model = mod, X_train = dataX)
+# is the same as: using given shap_contrib
+shap_long <- shap.prep(shap_contrib = shap_values$shap_score, X_train = dataX)
+# (Notice that there will be a data.table warning from `melt.data.table` due to `dayint` coerced from integer to double)
+
+# **SHAP summary plot**
+shap.plot.summary(shap_long)
+
+# sometimes for a preview, you want to plot less data to make it faster using `dilute`
+shap.plot.summary(shap_long, x_bound  = 1.2, dilute = 10)
+
+# Alternatives options to make the same plot:
+# option 1: start with the xgboost model
+shap.plot.summary.wrap1(mod, X = as.matrix(dataX))
+
+# option 2: supply a self-made SHAP values dataset (e.g. sometimes as output from cross-validation)
+shap.plot.summary.wrap2(shap_values$shap_score, as.matrix(dataX))
+
+# **SHAP dependence plot**
+# if without y, will just plot SHAP values of x vs. x
+shap.plot.dependence(data_long = shap_long, x = "dayint")
+
+
+# optional to color the plot by assigning `color_feature` (Fig.A)
+shap.plot.dependence(data_long = shap_long, x= "dayint",
+                     color_feature = "Column_WV")
+
+# optional to put a different SHAP values on the y axis to view some interaction (Fig.B)      
+shap.plot.dependence(data_long = shap_long, x= "dayint",
+                     y = "Column_WV", color_feature = "Column_WV")     
+
+
+# To make plots for a group of features:
+fig_list = lapply(names(shap_values$mean_shap_score)[1:6], shap.plot.dependence, 
+                  data_long = shap_long, dilute = 5)
+gridExtra::grid.arrange(grobs = fig_list, ncol = 2)
+
+
+# prepare the data using either: 
+# (this step is slow since it calculates all the combinations of features. This example spends 10s.)
+data_int <- shap.prep.interaction(xgb_mod = mod, X_train = as.matrix(dataX))
+# or:
+shap_int <- predict(mod, as.matrix(dataX), predinteraction = TRUE)
+
+# **SHAP interaction effect plot **
+shap.plot.dependence(data_long = shap_long,
+                     data_int = shap_int,
+                     x= "Column_WV",
+                     y = "AOT_Uncertainty", 
+                     color_feature = "AOT_Uncertainty")
+
+# choose to show top 4 features by setting `top_n = 4`, set 6 clustering groups.  
+plot_data <- shap.prep.stack.data(shap_contrib = shap_values$shap_score, top_n = 4, n_groups = 6)
+
+# choose to zoom in at location 500, set y-axis limit using `y_parent_limit`  
+# it is also possible to set y-axis limit for zoom-in part alone using `y_zoomin_limit`  
+shap.plot.force_plot(plot_data, zoom_in_location = 500, y_parent_limit = c(-1,1))
+
+# plot by each cluster
+shap.plot.force_plot_bygroup(plot_data)
+
+```
