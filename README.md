@@ -1,4 +1,4 @@
-This is the repo for the book [**Artificial Intelligence in Highway Safety**], by Subasish Das.
+This is the repo for the book **Artificial Intelligence in Highway Safety**, by Subasish Das.
 
 [![Build Status](https://github.com/dgrtwo/tidy-text-mining/workflows/bookdown/badge.svg)](https://github.com/dgrtwo/tidy-text-mining/actions)
 
